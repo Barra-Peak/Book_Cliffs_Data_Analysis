@@ -1,0 +1,1046 @@
+---
+title: "Book_Cliffs_Predictions"
+author: "Barra Peak"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2) # for plots
+library(ggpmisc) # extra ggplot stuff
+library(ggh4x) # more control over facet wrap and facet grid
+library(ggpubr) # for nice arranging
+library(dplyr) # easier data manipulation
+library(tidyverse) # for manipulating datatables
+library(viridis) # for making color ramps
+library(stringr) # nicer cleaning for strings
+library(openxlsx) # read in and export microsoft excel files
+```
+```{r load published data, echo = FALSE}
+clean_pujols_data <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/upb_zhe_data.xlsx", check.names = TRUE)
+```
+
+```{r load raman data, echo = FALSE}
+raman_data <- read.xlsx("/Users/barrapeak/Mirror/eU_Recycling/Data/2025_04_10_alpha_dose_data.xlsx", check.names = T) %>%
+  select("Location", "Sample", "Spot", "ID", "Peak", "Broke", "Raman.Target", "Da", "Da.std", "Da_h", "Da_h.std")
+```
+```{r alpha dose calculation, echo = FALSE}
+L238 <- 0.00000000015512 #decay constants in /yr
+L235 <- 0.00000000098485
+L232 <- 0.0000000000499
+Av <- 6.022*10^(23) # avogadro's number
+
+clean_pujols_data <- clean_pujols_data %>%
+  mutate(U238.atoms = (0.9928*U.ppm.x*Av*10^(-6))/238) %>%
+  mutate(U235.atoms = (0.0072*U.ppm.x*Av*10^(-6))/235) %>%
+  mutate(Th232.atoms = (U.ppm.x/U.Th*Av*10^(-6))/232) %>%
+  mutate(Max.Alpha.Dose = 8*U238.atoms*(exp(L238*U.Pb.Date.x*10^6)-1) + 
+           7*U235.atoms*(exp(L235*U.Pb.Date.x*10^6)-1) + 
+           6*Th232.atoms*(exp(L232*U.Pb.Date.x*10^6)-1)) %>%
+  mutate(MDA.Alpha.Dose = 8*U238.atoms*(exp(L238*MDA*10^6)-1) + 
+           7*U235.atoms*(exp(L235*MDA*10^6)-1) + 
+           6*Th232.atoms*(exp(L232*MDA*10^6)-1))
+```
+```{r merge and clean all data by "wedge", echo = F}
+all_clean_data <- clean_pujols_data %>%
+  full_join(raman_data, by = c("Sample", "Spot")) %>%
+  mutate(Longitude = gsub("‐", "-", Longitude)) %>%
+  mutate(across(c("Longitude", "Latitude"), as.numeric)) %>%
+  #drop_na(Latitude) %>%
+  filter(ZHe.Date < U.Pb.Date.x | is.na(ZHe.Date) == TRUE) %>%
+  mutate(Formation.Name = substr(Formation.Name, 4, nchar(Formation.Name))) %>%
+  mutate(Formation.Name = gsub("\n", " ", Formation.Name)) %>%
+  mutate(Formation.Name = str_trim(Formation.Name)) %>%
+  mutate(Wedge_BC = case_when(Formation.Name %in% c("Castlegate","Aberdeen Mbr","Spring Canyon Mbr", "Kenilworth Mbr","Sunnyside Mbr","Grassy Mbr","Desert Mbr", "Marapos Sandstone", "Meeker Sandstone") ~ "Wedge A",
+                           Formation.Name %in% c("Middle Castlegate", "Loyd Sandstone", "Neslen Fm", "Sego Sandstone", "Cozzette Mbr", "Corcoran Mbr"  ) ~ "Wedge B",
+                           Formation.Name %in% c("Bluecastle Tongue",
+                                                 "Rollins Sandstone") ~ "Wedge C",
+                           Formation.Name %in% c("Storrs Sandstone", "Panther Tongue", "Emery Sandstone", "Ferron Sandstone","Lower Dakota Fm", "Upper Dakota Fm") ~ "Pre-Campanian",
+                           .default = NA)) %>%
+  mutate(Wedge_BC = factor(Wedge_BC, levels = c("Wedge C", "Wedge B", "Wedge A", "Pre-Campanian", NA))) %>%
+  mutate(Wedge_all = case_when(Formation.Name %in% c("Castlegate","Aberdeen Mbr","Spring Canyon Mbr", "Kenilworth Mbr","Sunnyside Mbr","Grassy Mbr","Desert Mbr", "Marapos Sandstone", "Meeker Sandstone", "Middle Sixmile Canyon Fm", "Lower Sixmile Canyon Fm") ~ "Wedge A",
+                           Formation.Name %in% c("Middle Castlegate", "Loyd Sandstone", "Neslen Fm", "Sego Sandstone", "Cozzette Mbr", "Corcoran Mbr", "Upper Sixmile Canyon Fm") ~ "Wedge B",
+                           Formation.Name %in% c("Bluecastle Tongue",
+                                                 "Rollins Sandstone", "Price River Fm", "Pass Canyon Mbr") ~ "Wedge C",
+                           Formation.Name %in% c("Storrs Sandstone", "Panther Tongue", "Emery Sandstone", "Ferron Sandstone","Lower Dakota Fm", "Upper Dakota Fm", "Allen Valley Shale", "Sanpete Fm", "Funk Valley Fm", "Cow Canyon Mbr", "Wild Horse Canyon Mbr") ~ "Pre-Campanian",
+                           .default = NA)) %>%
+  mutate(Wedge_all = factor(Wedge_all, levels = c("Wedge C", "Wedge B", "Wedge A", "Pre-Campanian", NA)))
+
+all_gdz_data <- all_clean_data %>%
+  filter(between(U.Pb.Date.x, 1000, 1250)) %>%
+  filter(Peak == 356 | is.na(Peak) == TRUE)
+
+wedge_count_ZHe <- all_clean_data %>%
+  drop_na(ZHe.Date) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_ZHe" = "n")
+
+wedge_count_ZHe_gdz <- all_gdz_data %>%
+  drop_na(ZHe.Date) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_ZHe" = "n")
+
+wedge_count_raman_gdz <- all_gdz_data %>%
+  drop_na(Peak) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_raman" = "n")
+
+wedge_count_UPb <- all_clean_data %>%
+  drop_na(U.Pb.Date.x) %>%
+  filter(Peak == 356 | is.na(Peak) == TRUE) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_upb" = "n")
+
+wedge_count_UPb_gdz <- all_gdz_data %>%
+  drop_na(U.Pb.Date.x) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_upb" = "n")
+
+all_clean_data <- all_clean_data %>%
+  full_join(wedge_count_ZHe, by = "Wedge_all") %>%
+  full_join(wedge_count_raman_gdz, by = "Wedge_all") %>%
+  full_join(wedge_count_UPb, by = "Wedge_all")
+
+all_gdz_data <- all_gdz_data %>%
+  full_join(wedge_count_ZHe_gdz, by = "Wedge_all") %>%
+  full_join(wedge_count_raman_gdz, by = "Wedge_all") %>%
+  full_join(wedge_count_UPb_gdz, by = "Wedge_all")
+
+```
+
+
+```{r Fig. 2 Closure temp and depth plots, echo = FALSE}
+tc_table <- data.frame("Chronometer" = c("(U-Th)/He", "ER Raman", "v1 and v2 Raman", "U-Pb"),"Temp_Min" = c(140, 260, 330, 900),
+                       "Temp_Max" = c(220, 310, 370, 1000)) %>%
+  pivot_longer(cols = c("Temp_Min", "Temp_Max"), names_to = "Range", values_to = "Temp")
+col_vals <- c("(U-Th)/He" = "#6fc7f7", "ER Raman" = "#00b783" , "U-Pb" = "#f8766d", "v1 and v2 Raman" = "gray")
+
+tc_plot <- tc_table %>%
+  filter(Chronometer != "v1 and v2 Raman") %>%
+  ggplot(aes(x = Chronometer, y = Temp, group_by = Chronometer, color = as.factor(Chronometer))) +
+  geom_line(linewidth = 4) +
+  annotate('rect', xmin = -Inf, xmax = Inf, ymax = 25, ymin = 0, fill = "blue", alpha = 0.3) +
+  geom_hline(yintercept = 400, color = "#00b783", linetype = "dashed") +
+  scale_y_reverse(name = "Temperature (°C)", limits = c(0, 1000)) +
+  scale_x_discrete(position = "bottom") +
+  ggtitle(label = paste("Closure or Annealing", "Temperature", sep = "\n")) +
+  scale_colour_manual(values = col_vals) +
+  theme(panel.background = element_rect(fill = "transparent", colour = "transparent", linewidth = 1), 
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.1,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7, angle = 90),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none")
+
+tc_plot
+#ggsave("/Users/barrapeak/Mirror/AGU_2025/Poster/tc_plot_min.pdf", tc_plot, width = 3.5, height = 6)
+
+geotherm_range <- seq(10, 60, 2)
+geotherm <- data.frame("Geotherm" <- "G", "G" = geotherm_range) %>%
+  mutate(Geotherm = paste(Geotherm, as.character(G), sep = "_")) %>%
+  select("Geotherm", "G") %>%
+  mutate(Chronometer = "(U-Th)/He") %>%
+  mutate(Range = "Temp_Min")
+
+geotherm_400 <- geotherm %>%
+  mutate(Range = "Temp") %>%
+  mutate(Chronometer = "Max Alpha")
+
+geotherm_2 <- geotherm %>%
+  mutate(Range = "Temp_Max")
+geotherm_ZHe <- rbind(geotherm, geotherm_2)
+
+geotherm_RER <- geotherm_ZHe %>%
+  mutate(Chronometer = "ER Raman")
+geotherm_Rv <- geotherm_ZHe %>%
+  mutate(Chronometer = "v1 and v2 Raman")
+geotherm_U <- geotherm_ZHe %>%
+  mutate(Chronometer = "U-Pb")
+
+geotherm <- rbind(geotherm_ZHe, geotherm_RER, geotherm_Rv, geotherm_U, geotherm_400)
+
+tc_table1 <- tc_table %>%
+  mutate(Chronometer = as.character(Chronometer))
+geotherm_tc <- full_join(tc_table, geotherm, join_by("Chronometer", "Range")) %>%
+  mutate(Temp = case_when(Chronometer == "Max Alpha" ~ 400,
+                          .default = Temp)) %>%
+  mutate(Depth = Temp/G)
+
+geotherm_plot <- geotherm_tc %>%
+  filter(Chronometer != "v1 and v2 Raman") %>%
+  filter(G >= 20) %>%
+  ggplot(aes(x = G, y = Depth,  group_by = interaction(Chronometer, Range), color = as.factor(Chronometer), linetype = as.factor(Range))) +
+  geom_vline(xintercept = 30, color = "black", linetype = "dashed") + 
+  geom_vline(xintercept = 40, color = "black", linetype = "dashed") + 
+  geom_line() +
+  annotate("text", x = 35, y = 40, label = paste("Median geotherms in", "modern basin settings", sep = "\n"), colour = "black", size = 7/.pt) +
+  scale_color_manual(values = col_vals) +
+  scale_y_reverse(name = "Depth (km)", limits = c(0, 50), breaks = seq(0, 50, 5), position = "right") +
+  scale_x_continuous(name = "Geotherm (°C/km)", limits = c(20, 60), seq(20, 60, 5), position = "top") +
+  theme(panel.background = element_rect(fill = "transparent", colour = "transparent", linewidth = 1), 
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.1,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none")
+geotherm_plot
+
+#ggsave("/Users/barrapeak/Mirror/AGU_2025/Poster/geom_plot_min.pdf", geotherm_plot, width = 5, height = 6)
+```
+```{r Figure 5 KDE U-Pb all by wedge, echo = FALSE}
+UPb_KDE <- all_clean_data %>%
+  drop_na(Wedge_all) %>%
+  drop_na(U.Pb.Date.x)
+
+binwidth <- 20
+upb_density <- density(UPb_KDE$U.Pb.Date.x, bw = binwidth)
+upb_density.fun <- data.frame("x" = unlist(upb_density[[1]]), "y" = unlist(upb_density[[2]]))
+#test <- which(upb_density.fun == max(upb_density.fun$y), arr.ind=TRUE)
+peak1 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun$y))
+peak2 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun[upb_density.fun$x > 1700, ]$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun[upb_density.fun$x > 1700, ]$y))
+peak3 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun[upb_density.fun$x > 2500, ]$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun[upb_density.fun$x > 2500, ]$y))
+
+p.density <- UPb_KDE %>%
+  #filter(U.Pb.Date.x > 50) %>%
+  ggplot(aes(x = U.Pb.Date.x, group = Wedge_all, fill = Wedge_all)) +
+    annotate("rect", xmin = 1000, xmax = 1250, ymin = -Inf, ymax = Inf, alpha = 0.2, fill = "gray") +
+  #geom_histogram(aes(y = after_stat(density)), binwidth = 10, fill="gray", color="gray",  alpha = 0.9) +
+
+    geom_density(bw = binwidth, alpha = 0.4, adjust = 2) +   # kernal density
+  
+  #geom_rug(alpha = 1/2, position = "jitter", outside = TRUE) +
+  #geom_rug(alpha = 0.4, sides = "b", outside = FALSE) +
+    coord_cartesian(clip = "off") +
+    scale_x_continuous(name = "U-Pb Age (Ma)", limits = c(-100, 4000), breaks = seq(0, 3500, 500)) +
+    ylab("Density") +
+    annotate("text", x = 2500, y = 0.002, label = paste("KB =", binwidth), colour = "black") +
+    geom_text(aes(x = 2500, y = 0.0015, label = paste("n =", n_wedge_upb)), colour = "black") +
+    theme_bw() +
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.background = element_rect(fill = NA, colour = NA),
+        legend.key = element_blank(),
+        legend.position = "none",
+        #legend.position.inside = c(0.25, 0.7),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 9),
+        plot.title = element_text(hjust = 0.5)) +
+  facet_wrap(vars(Wedge_all), ncol = 1)
+p.density
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/pujols.upb.kde.pdf", plot = p.density, width = 3.25, height = 4.5)
+```
+```{r Figure 7A KDE Grenville U-Pb and ZHe by wedge, echo = FALSE}
+UPb_KDE <- all_clean_data %>%
+  drop_na(Wedge_all) %>%
+  drop_na(U.Pb.Date.x) %>%
+  filter(ZHe.Date < U.Pb.Date.x | is.na(ZHe.Date) == TRUE) %>%
+  filter(between(U.Pb.Date.x, 1000, 1250)) %>%
+  select(!c("n_wedge_ZHe", "n_wedge_raman", "n_wedge_upb"))
+
+wedge_count_ZHe <- UPb_KDE %>%
+  drop_na(ZHe.Date) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_ZHe" = "n")
+
+wedge_count_UPb <- UPb_KDE %>%
+  drop_na(U.Pb.Date.x) %>%
+  count(Wedge_all) %>%
+  rename("n_wedge_upb" = "n")
+
+UPb_KDE <- UPb_KDE %>%
+  full_join(wedge_count_ZHe, by = "Wedge_all") %>%
+  full_join(wedge_count_UPb, by = "Wedge_all")
+
+binwidth <- 20
+upb_density <- density(UPb_KDE$U.Pb.Date.x, bw = binwidth)
+upb_density.fun <- data.frame("x" = unlist(upb_density[[1]]), "y" = unlist(upb_density[[2]]))
+#test <- which(upb_density.fun == max(upb_density.fun$y), arr.ind=TRUE)
+peak1 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun$y))
+#peak2 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun[upb_density.fun$x > 1700, ]$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun[upb_density.fun$x > 1700, ]$y))
+#peak3 <- data.frame("x" = upb_density.fun[which(upb_density.fun == max(upb_density.fun[upb_density.fun$x > 2500, ]$y), arr.ind=TRUE)[1], 1], "y" = max(upb_density.fun[upb_density.fun$x > 2500, ]$y))
+
+all.density <- UPb_KDE %>%
+  #filter(U.Pb.Date.x > 50) %>%
+  ggplot() +
+    annotate("rect", xmin = 1000, xmax = 1250, ymin = -Inf, ymax = Inf, alpha = 0.2, fill = "gray") +
+  #geom_histogram(aes(y = after_stat(density)), binwidth = 10, fill="gray", color="gray",  alpha = 0.9) +
+
+    geom_density(aes(x = U.Pb.Date.x, group = Wedge_all, fill = Wedge_all), bw = binwidth, alpha = 0.3, adjust = 2) +   # kernal density
+    geom_density(aes(x = ZHe.Date, group = Wedge_all, fill = Wedge_all), bw = binwidth, alpha = 0.6, adjust = 2) +   # kernal density
+  
+  #geom_rug(alpha = 1/2, position = "jitter", outside = TRUE) +
+  #geom_rug(alpha = 0.4, sides = "b", outside = FALSE) +
+    coord_cartesian(clip = "off") +
+    scale_x_continuous(name = "U-Pb Age (Ma)", limits = c(-100, 1500), breaks = seq(0, 1500, 250)) +
+    ylab("Density") +
+    annotate("text", x = 0, y = 0.006, label = paste("KB =", binwidth), colour = "black") +
+    geom_text(aes(x = 0, y = 0.004, label = paste("n =", n_wedge_upb)), colour = "black") +
+    geom_text(aes(x = 0, y = 0.002, label = paste("n =", n_wedge_ZHe)), colour = "black") +
+    theme_bw() +
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.background = element_rect(fill = NA, colour = NA),
+        legend.key = element_blank(),
+        legend.position = "none",
+        #legend.position.inside = c(0.25, 0.7),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 9),
+        plot.title = element_text(hjust = 0.5)) +
+  facet_wrap(vars(Wedge_all), ncol = 1)
+all.density
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/wedge.upb.zhe.kde.pdf", plot = all.density, width = 2.5, height = 6)
+
+```
+```{r Figure S1. KEEP Raman comparison pit or surface, echo = FALSE}
+raman_comp <- all_clean_data %>%
+  #drop_na(Wedge_all) %>%
+  filter(Peak == 356) %>%
+  drop_na(Da) %>%
+  mutate(Raman.Spot = case_when(str_detect(Raman.Target, "grain") ~ "Grain Surface",
+                                .default = "Pit")) %>%
+  mutate(Raman.Spot = as.factor(Raman.Spot)) %>%
+  mutate(Max.Alpha.Dose = Max.Alpha.Dose/(10^(16)))
+count_spot <- raman_comp %>%
+  count(Raman.Spot) %>%
+  rename("n_spot" = "n")
+
+raman_comp <- full_join(raman_comp, count_spot, by = "Raman.Spot")
+
+raman.diff.kde <- raman_comp %>%
+  #pivot_longer(c(Da, Max.Alpha.Dose), names_to = "Alpha.Dose") %>%
+  ggplot(aes(x = (Max.Alpha.Dose - Da), fill = Raman.Spot)) +
+    geom_density(bw = 10, na.rm = TRUE) +   # kernal density
+    geom_text(aes(x = 150, y = 0.01, label = paste("n =", n_spot, sep = " ")), color = "black") +
+    ylab("Density") +
+    scale_x_continuous(name = "Max Possible Radiation Damage - Measured Raman Radiation Damage", limits = c(-50, 250), breaks = seq(0, 200, 50)) +
+   # xlab("Measured Raman Radiation Damage - Max Possible Radiation Damage") +
+    theme_bw() +
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.background = element_rect(fill = NA, colour = NA),
+        legend.key = element_blank(),
+        legend.position = "none",
+        #legend.position.inside = c(0.25, 0.7),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        plot.title = element_text(hjust = 0.5)) +
+    facet_wrap(vars(Raman.Spot), scales = "fixed", ncol = 1)
+raman.diff.kde
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/raman_diff_kde.pdf",raman.diff.kde, width = 3.25, height = 3, dpi = 300)
+
+ks.1 <- raman_comp %>%
+  filter(Raman.Spot == "Pit")
+ks.2 <- raman_comp %>%
+  filter(Raman.Spot == "Grain Surface")
+ks.diff <- ks.test(x = ks.1$Max.Alpha.Dose-ks.1$Da, y = ks.2$Max.Alpha.Dose-ks.2$Da, alternative = "two.sided")
+print(ks.diff$p.value)
+raman.cdf <- raman_comp %>%
+  ggplot(aes(x = Max.Alpha.Dose - Da, group = Raman.Spot, color = Raman.Spot)) +
+    stat_ecdf(na.rm = TRUE) +   # kernal density
+    scale_y_continuous(name = "Cumulative Distribution Function", labels = scales::label_number(accuracy = 0.001)) +
+   scale_x_continuous(name = "Max Possible Radiation Damage - Measured Raman Radiation Damage", limits = c(-50, 250), breaks = seq(0, 200, 50)) +
+    annotate("text", x = 150, y = 0.4, label = "KS Test", hjust = 0) +
+    annotate("text", x = 150, y = 0.3, label = paste("D =", round(ks.diff$statistic, 2), sep = " "), hjust = 0) +
+    annotate("text", x = 150, y = 0.2, label = paste("p-value =", round(ks.diff$p.value,2), sep = " "), hjust = 0) +
+    theme_bw() +
+    theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.5),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.text.x = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.background = element_rect(fill = NA, colour = NA),
+        legend.key = element_blank(),
+        legend.position = "none",
+        #legend.position.inside = c(0.25, 0.7),
+        legend.text = element_text(size = 7),
+        legend.title = element_text(size = 7),
+        plot.title = element_text(hjust = 0.5))
+raman.cdf
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/raman_diff_cdf.pdf",raman.cdf, width = 3.25, height = 2, dpi = 300)
+```
+
+```{r load tT paths, echo = FALSE}
+bc_gc <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/models_grenville_cooling.xlsx", check.names = TRUE) %>%
+  mutate(Path.Name = paste("GC", Path.Name, sep = "-")) %>%
+  group_by(Path.Name)
+
+bc_gc_wf <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/models_grenville_cooling_w_foreland.xlsx", check.names = TRUE) %>%
+  mutate(Path.Name = paste("GF", Path.Name, sep = "-")) %>%
+  group_by(Path.Name)
+
+bc_sc <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/models_slow_early_cooling.xlsx", check.names = TRUE) %>%
+  mutate(Path.Name = paste("SEC", Path.Name, sep = "-")) %>%
+  group_by(Path.Name)
+
+bc_fc <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/models_fast_late_cooling.xlsx", check.names = TRUE) %>%
+  mutate(Path.Name = paste("FLC", Path.Name, sep = "-")) %>%
+  group_by(Path.Name)
+
+bc_paths <- rbind(bc_gc, bc_gc_wf, bc_sc, bc_fc) %>%
+  mutate(Burial = as.factor(case_when(endsWith(Path.Name, "min") ~ "Min_10km",
+                            .default = "Max_14km"))) %>%
+    mutate(Arrival = as.factor(case_when(str_detect(Path.Name, "1c") | str_detect(Path.Name, "3") ~ "Neoproterozoic",
+                                    str_detect(Path.Name, "2") | str_detect(Path.Name, "1b") ~ "Cambrian",
+                           .default = "Pennsylvanian"))) %>%
+  mutate(Arrival = factor(Arrival, levels = c("Pennsylvanian", "Cambrian", "Neoproterozoic"))) %>%
+  mutate(Recycled = case_when(str_detect(Path.Name, "1b") | str_detect(Path.Name, "1c") ~ "3 Burial Events",
+                              .default = "2 Burial Events")) %>%
+  mutate(Recycled = factor(Recycled, levels = c("2 Burial Events", "3 Burial Events"))) %>%
+  mutate(Model = case_when(str_detect(Path.Name, "3") ~ "3",
+                           str_detect(Path.Name, "2") ~ "2",
+                           str_detect(Path.Name, "1b") ~ "1b",
+                           str_detect(Path.Name, "1a") ~ "1a",
+                              .default = "1c")) %>%
+  mutate(Provenance = case_when(str_detect(Path.Name, "1") ~ "Pennsylvanian and Younger",
+                                 .default = "Older than Pennsylvanian")) %>%
+  mutate(Provenance = factor(Provenance, levels = c("Pennsylvanian and Younger", "Older than Pennsylvanian"))) %>%
+  mutate(Model.Group = case_when(str_detect(Path.Name, "GC") ~ "Grenville Orogeny Exhumation, No Foreland Burial",
+                                 str_detect(Path.Name, "GF") ~ "Grenville Orogeny Exhumation, Foreland Burial and Exhumation",
+                                 str_detect(Path.Name, "SEC") ~ "Slow Cooling to Surface",
+                                 .default = "Fast Cooling to Surface")) %>%
+  mutate(Model.Group = factor(Model.Group, levels = c(
+    "Grenville Orogeny Exhumation, No Foreland Burial", "Grenville Orogeny Exhumation, Foreland Burial and Exhumation", "Slow Cooling to Surface", "Fast Cooling to Surface")))
+```
+```{r load Forward model predictions, echo = FALSE}
+bc_preds <- read.xlsx("/Users/barrapeak/Dropbox/Code/GitHub/Book_Cliffs_Data_Analysis/model_predictions.xlsx", check.names = TRUE)
+
+bc_preds_t <- bc_preds %>%
+  pivot_longer(cols = c(gc_20_ZHe, gc_90_ZHe, gc_alpha, gf_20_ZHe, gf_90_ZHe, gf_alpha, sc_20_ZHe, sc_90_ZHe, sc_alpha, fc_20_ZHe, fc_90_ZHe, fc_alpha), names_to = "Model", values_to = "Value") %>%
+  mutate(Rs = case_when(str_detect(Model, "20") ~ 20,
+                        .default = 90)) %>%
+  mutate(Prediction.Type = case_when(str_detect(Model, "alpha") ~ "Alpha.Dose",
+                                     .default = "ZHe")) %>%
+  mutate(Model.Group = case_when(str_detect(Model, "gc") ~ "Grenville Orogeny Exhumation, No Foreland Burial",
+                                 str_detect(Model, "gf") ~ "Grenville Orogeny Exhumation, Foreland Burial and Exhumation",
+                                 str_detect(Model, "sc") ~ "Slow Cooling to Surface",
+                                 .default = "Fast Cooling to Surface")) %>%
+  mutate(Model.Group = factor(Model.Group, levels = c(
+    "Grenville Orogeny Exhumation, No Foreland Burial", "Grenville Orogeny Exhumation, Foreland Burial and Exhumation", "Slow Cooling to Surface", "Fast Cooling to Surface"))) %>%
+  select(!c("Model")) %>%
+  pivot_wider(names_from = Prediction.Type, values_from = "Value") %>%
+  mutate(Burial = as.factor(case_when(endsWith(Path.Name, "min") ~ "Min_10km",
+                            .default = "Max_14km"))) %>%
+    mutate(Arrival = as.factor(case_when(str_detect(Path.Name, "1c") | str_detect(Path.Name, "3") ~ "Neoproterozoic",
+                                    str_detect(Path.Name, "2") | str_detect(Path.Name, "1b") ~ "Cambrian",
+                           .default = "Pennsylvanian"))) %>%
+  mutate(Arrival = factor(Arrival, levels = c("Pennsylvanian", "Cambrian", "Neoproterozoic"))) %>%
+  mutate(Recycled = case_when(str_detect(Path.Name, "1b") | str_detect(Path.Name, "1c") ~ "3 Burial Events",
+                              .default = "2 Burial Events")) %>%
+  mutate(Recycled = factor(Recycled, levels = c("2 Burial Events", "3 Burial Events"))) %>%
+  mutate(Model = case_when(str_detect(Path.Name, "3") ~ "2b",
+                           str_detect(Path.Name, "2") ~ "2a",
+                           str_detect(Path.Name, "1b") ~ "1b",
+                           str_detect(Path.Name, "1a") ~ "1a",
+                              .default = "1c")) %>%
+  mutate(Provenance = case_when(str_detect(Path.Name, "1") ~ "Pennsylvanian and Younger",
+                                 .default = "Older than Pennsylvanian")) %>%
+  mutate(Provenance = factor(Provenance, levels = c("Pennsylvanian and Younger", "Older than Pennsylvanian")))
+
+for(i in seq(1,nrow(bc_preds_t)-1, 2)){
+  bc_preds_t$Alpha.Dose[i] <- bc_preds_t$Alpha.Dose[i+1]
+}
+
+eU_levels <- rev(unique(bc_preds_t$eU.at.t1))
+bc_preds_t <- bc_preds_t %>%
+  ungroup() %>%
+  mutate(eU.fac = factor(eU.at.t1, levels = eU_levels)) %>%
+  group_by(Path.Name)
+
+```
+
+```{r plot setup, echo = FALSE}
+eU_scale <- c(10,50,seq(100, 1000, 100), 1500, 2000)
+model_colors <- c("2b" = "#e0ab86", "2a" = "#d36228", "1a" = "#00adee",
+                  "1b" = "#1b75bb", "1c" = "#2e3191")# final
+provenance_colors <- c("Pennsylvanian and Younger" = "#2CA02C", "Older than Pennsylvanian" = "#d36027")
+prehistory_colors <- c("Grenville Orogeny Exhumation, No Foreland Burial" = "#332288",
+                  "Grenville Orogeny Exhumation, Foreland Burial and Exhumation" = "#225555",
+                  "Slow Cooling to Surface" = "#997700",
+                  "Fast Cooling to Surface" = "#72190E")
+alpha_levels_prehistory <- c("Grenville Orogeny Exhumation, No Foreland Burial" = 1,
+                  "Grenville Orogeny Exhumation, Foreland Burial and Exhumation" = 0.75,
+                  "Slow Cooling to Surface" = 0.5,
+                  "Fast Cooling to Surface" = 0.25)
+line_types <- c("Min_10km" = "dotted", "Max_14km" = "solid")
+alpha_levels_burial <- c("Min_10km" = 0.5, "Max_14km" = 1)
+```
+```{r Figure 9A, S2A plot all tT plots, echo = FALSE}
+#line_manual <- c("solid" = "solid", "dashed" = "dashed", "dotted" = "dotted", "dotdash" = "dotdash")
+tT_plot_pretty <- bc_paths %>%
+  ggplot(aes(x = Time, y = Temp, group = Path.Name, color = Model.Group, alpha = Burial, linetype = Burial)) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "#0000ff", linewidth = 0.5, alpha = 0.3) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 140, ymax = 220, fill = "#6fc7f7", alpha = 0.3) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 260, ymax = 310, fill = "#00b783", alpha = 0.3) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 950, ymax = 1000, fill = "#f8766d", alpha = 0.3) +
+  geom_hline(yintercept = 400, linetype = "dashed", color = "#00b783", alpha = 0.3) +
+  geom_line() +
+  scale_color_manual(values = prehistory_colors) +
+  scale_alpha_manual(values = alpha_levels_burial) +
+  scale_linetype_manual(values = line_types) +
+  scale_x_reverse(name = "Time (Ma)", limits = c(1200, 0), breaks = seq(1200, 0, -200)) +
+  coord_cartesian(ylim = c(1400, 0)) + 
+  scale_y_reverse(name = "Temperature (°C)", , breaks = seq(1400, 0, -200)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "bottom") +
+  facet_wrap(vars(Model), nrow = 1)
+  #facet_grid2(Provenance ~ Arrival, axes = "margins")
+tT_plot_pretty
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/Forward_Model_tT_Paths_row_legend.pdf", tT_plot_pretty, width = 6.5, height = 1.75, dpi = 300)
+```
+
+```{r Figure 7B ZHe for comparison by "wedge", echo = FALSE}
+# wedge.pred <- all_clean_data %>%
+#   filter(ZHe.Date < U.Pb.Date.x | is.na(ZHe.Date) == TRUE) %>%
+#   filter(between(U.Pb.Date.x, 1000, 1250)) %>%
+#   drop_na(Wedge_all) %>%
+#   filter(Peak %in% c(356, NA))
+# wedge.pred.1 <- wedge.pred %>%
+#   mutate(Provenance = "Pennsylvanian and Younger") %>%
+#   mutate(Arrival = "Pennsylvanian")
+# wedge.pred.2 <- wedge.pred.1 %>%
+#   mutate(Arrival = "Cambrian")
+# wedge.pred.3 <- wedge.pred.2 %>%
+#   mutate(Arrival = "Neoproterozoic")
+# wedge.pred.4 <- rbind(wedge.pred.1, wedge.pred.2, wedge.pred.3)
+# wedge.pred.5 <- wedge.pred.4 %>%
+#   mutate(Provenance = "Older than Pennsylvanian")
+# 
+# data.pred <- rbind(wedge.pred.4, wedge.pred.5) %>%
+#   mutate(Provenance = factor(Provenance, levels = c("Pennsylvanian and Younger", "Older than Pennsylvanian"))) %>%
+#   mutate(Arrival = factor(Arrival, levels = c("Pennsylvanian", "Cambrian", "Neoproterozoic")))
+
+model.pred <- all_clean_data %>%
+  filter(ZHe.Date < U.Pb.Date.x | is.na(ZHe.Date) == TRUE) %>%
+  filter(between(U.Pb.Date.x, 1000, 1250)) %>%
+  drop_na(Wedge_all) %>%
+  filter(Peak %in% c(356, NA))
+model.pred.1a <- model.pred %>%
+  mutate(Model = "1a")
+model.pred.1b <- model.pred.1a %>%
+  mutate(Model = "1b")
+model.pred.1c <- model.pred.1a %>%
+  mutate(Model = "1c")
+model.pred.2 <- model.pred.1a %>%
+  mutate(Model = "2")
+model.pred.3 <- model.pred.1a %>%
+  mutate(Model = "3")
+
+data.pred <- rbind(model.pred.1a, model.pred.1b, model.pred.1c, model.pred.2, model.pred.3) %>%
+  mutate(Max.Alpha.Dose = Max.Alpha.Dose/(10^(16)))
+
+## Pre-Campanian Wedge ----
+ZHe_data_pretty_pc <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  filter(Wedge_all == "Pre-Campanian") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  geom_text(aes(x = 5, y = 0, label = paste("n = ", nrow(drop_na(data.pred, ZHe.Date) %>% filter(Wedge_all == "Pre-Campanian"))/5, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_data_pretty_pc
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.pc.row.by.alpha.pdf", ZHe_data_pretty_pc, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge A ----
+ZHe_data_pretty_wa <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  filter(Wedge_all == "Wedge A") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  geom_text(aes(x = 5, y = 0, label = paste("n = ", nrow(drop_na(data.pred, ZHe.Date) %>% filter(Wedge_all == "Wedge A"))/5, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_data_pretty_wa
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.wa.row.by.alpha.pdf", ZHe_data_pretty_wa, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge B ----
+ZHe_data_pretty_wb <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  filter(Wedge_all == "Wedge B") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  geom_text(aes(x = 5, y = 0, label = paste("n = ", nrow(drop_na(data.pred, ZHe.Date) %>% filter(Wedge_all == "Wedge B"))/5, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_data_pretty_wb
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.wb.row.by.alpha.pdf", ZHe_data_pretty_wb, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge C ----
+ZHe_data_pretty_wc <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  filter(Wedge_all == "Wedge C") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  geom_text(aes(x = 5, y = 0, label = paste("n = ", nrow(drop_na(data.pred, ZHe.Date) %>% filter(Wedge_all == "Wedge C"))/5, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_data_pretty_wc
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.wc.row.by.alpha.pdf", ZHe_data_pretty_wc, width = 6.5, height = 1.75, dpi = 300)
+
+## All ZHe ----
+ZHe_data_pretty_all <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  drop_na(Wedge_all) %>%
+  filter(Model == "2") %>%
+  ggplot(aes(x = Max.Alpha.Dose/(10^(16)), y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  #geom_text(aes(x = 5, y = 0, label = paste("n = ", n_wedge_ZHe, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Wedge_all), axes = "margins", ncol = 1)
+ZHe_data_pretty_all
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.all.by_wedge_v2.pdf", ZHe_data_pretty_all, width = 2, height =6, dpi = 300)
+
+## All ZHe vs ESR ----
+ZHe_data_ESR <- data.pred %>%
+  drop_na(ZHe.Date) %>%
+  drop_na(Wedge_all) %>%
+  filter(Model == "2") %>%
+  ggplot(aes(x = ESR, y = ZHe.Date, ymin = ZHe.Date - ZHe.2sigma, ymax = ZHe.Date + ZHe.2sigma)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  #scale_color_manual(values = model_colors) +
+  #scale_color_viridis() +
+  #geom_point(data = bc_plot_data, aes(x = alpha_e/(10^(16)), y = ZHe.date, shape = Path.Name.fac)) +
+  #geom_point() +
+  #scale_color_viridis(name = "eU (ppm)", limits = c(min(eU_scale), max(eU_scale)), breaks = eU_scale, na.value = "gray") +
+  #geom_text(aes(x = 5, y = 0, label = paste("n = ", n_wedge_ZHe, sep = " ")), color = "black") +
+  coord_cartesian(xlim = c(20, 90), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  #scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_continuous(name = "ESR (um)", breaks = seq(20, 90, 10)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Wedge_all), axes = "margins", ncol = 1)
+ZHe_data_ESR
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.data.ESR.by_wedge_v2.pdf", ZHe_data_ESR, width = 2, height =6, dpi = 300)
+
+```
+```{r Figure 7C Alpha dose for comparison by "wedge", echo = FALSE}
+
+## Pre-Campanian Wedge ----
+alpha_data_pretty_pc <- data.pred %>%
+  drop_na(Da) %>%
+  filter(Wedge_all == "Pre-Campanian") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std)) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  geom_text(aes(x = 5, y = 1000, label = paste("n = ", nrow(drop_na(data.pred, Da) %>% filter(Wedge_all == "Pre-Campanian"))/5, sep = " ")), color = "black") +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_data_pretty_pc
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.data.pc.row.by.alpha.pdf", alpha_data_pretty_pc, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge A ----
+alpha_data_pretty_wa <- data.pred %>%
+  drop_na(Da) %>%
+  filter(Wedge_all == "Wedge A") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std)) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  geom_text(aes(x = 5, y = 1000, label = paste("n = ", nrow(drop_na(data.pred, Da) %>% filter(Wedge_all == "Wedge A"))/5, sep = " ")), color = "black") +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_data_pretty_wa
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.data.wa.row.by.alpha.pdf", alpha_data_pretty_wa, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge B ----
+alpha_data_pretty_wb <- data.pred %>%
+  drop_na(Da) %>%
+  filter(Wedge_all == "Wedge B") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std)) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  geom_text(aes(x = 5, y = 1000, label = paste("n = ", nrow(drop_na(data.pred, Da) %>% filter(Wedge_all == "Wedge B"))/5, sep = " ")), color = "black") +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_data_pretty_wb
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.data.wb.row.by.alpha.pdf", alpha_data_pretty_wb, width = 6.5, height = 1.75, dpi = 300)
+
+## Wedge C ----
+alpha_data_pretty_wc <- data.pred %>%
+  drop_na(Da) %>%
+  filter(Wedge_all == "Wedge C") %>%
+  ggplot(aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std)) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_errorbar(orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(size = 0.75, color = "black") +
+  geom_text(aes(x = 5, y = 1000, label = paste("n = ", nrow(drop_na(data.pred, Da) %>% filter(Wedge_all == "Wedge C"))/5, sep = " ")), color = "black") +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_data_pretty_wc
+
+ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.data.wc.row.by.alpha.pdf", alpha_data_pretty_wc, width = 6.5, height = 1.75, dpi = 300)
+
+## All Alpha ----
+
+mda_line <- data.pred %>%
+  filter(Model == "2") %>%
+  group_by(Wedge_all) %>%
+  do(model = lm(log10(MDA.Alpha.Dose/(10^16)) ~ log10(Max.Alpha.Dose), data = .)) %>%
+  mutate(intercept = model$coefficient[[1]]) %>%
+  mutate(slope = model$coefficient[[2]])
+   
+alpha_data_pretty_all <- data.pred %>%
+  drop_na(Da) %>%
+  filter(Model == "2")
+alpha_data_plot <- 
+  ggplot(alpha_data_pretty_all, aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std)) +
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype = "dashed") +
+  geom_abline(data = mda_line, aes(intercept = intercept, slope = slope), color = "blue", linetype = "dashed") +
+  geom_errorbar(data = alpha_data_pretty_all, aes(x = Max.Alpha.Dose, y = Da, ymin = Da - Da.std, ymax = Da + Da.std), orientation = "x", lineend = "square", linewidth = 0.25) +
+  geom_point(data = alpha_data_pretty_all, aes(x = Max.Alpha.Dose, y = Da), size = 0.75, color = "black") +
+  geom_text(aes(x = 2, y = 900, label = paste("n = ", n_wedge_raman, sep = " ")), color = "black") +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "right") +
+  #facet_wrap(vars(Model), axes = "margins", nrow = 1)
+  facet_wrap(vars(Wedge_all), axes = "margins", ncol = 1)
+alpha_data_plot
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.data.all.wedge.v2.pdf", alpha_data_plot, width = 3.25, height = 6, dpi = 300)
+```
+
+```{r Figure 9B tT ZHe predictions, echo = FALSE}
+ZHe_prediction_pretty <- bc_preds_t %>%
+  filter(eU.at.t1 <= 1000) %>%
+  mutate(max_alpha = max_alpha/(10^(16))) %>%
+  ggplot(aes(x = max_alpha, y = ZHe, group = interaction(Path.Name, Rs, Model.Group), color = Model, alpha = Burial, linetype = Burial)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_line() +
+  scale_color_manual(values = model_colors) +
+  scale_alpha_manual(values = alpha_levels_burial) +
+  scale_linetype_manual(values = line_types) +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_prediction_pretty
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.pred.row.by.alpha.pdf", ZHe_prediction_pretty, width = 6.5, height = 1.75, dpi = 300)
+
+```
+```{r Figure 9C tT alpha predictions, echo = FALSE}
+alpha_prediction_pretty <- bc_preds_t %>%
+  #filter(eU.at.t1 <= 1000) %>%
+  filter(Rs == 90) %>%
+  filter(Model.Group == "Grenville Orogeny Exhumation, No Foreland Burial") %>%
+  mutate(max_alpha = max_alpha/(10^(16))) %>%
+  ggplot(aes(x = max_alpha, y = Alpha.Dose/(10^(16)), group = interaction(Path.Name, Rs, Model.Group), color = Model, linetype = Burial, alpha = Burial)) +
+  geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_line() +
+  scale_color_manual(values = model_colors) +
+  scale_alpha_manual(values = alpha_levels_burial) +
+  scale_linetype_manual(values = line_types) +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_prediction_pretty
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.pred.all.models.row.by.alpha_fixed.pdf", alpha_prediction_pretty, width = 6.5, height = 1.75, dpi = 300)
+```
+
+```{r Figure S2B all tT ZHe predictions, echo = FALSE}
+ZHe_prediction_pretty <- bc_preds_t %>%
+  filter(eU.at.t1 <= 1000) %>%
+  mutate(max_alpha = max_alpha/(10^(16))) %>%
+  ggplot(aes(x = max_alpha, y = ZHe, group = interaction(Path.Name, Rs, Model.Group), color = Model.Group, alpha = Burial, linetype = Burial)) +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_line() +
+  scale_color_manual(values = prehistory_colors) +
+  scale_alpha_manual(values = alpha_levels_burial) +
+  scale_linetype_manual(values = line_types) +
+  coord_cartesian(xlim = c(1, 1000), ylim = c(0, 1100)) +
+  scale_y_continuous(name = "Predicted ZHe Date (Ma)", breaks = seq(0, 1100, 100)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+ZHe_prediction_pretty
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/ZHe.pred.row.by.alpha.S2.pdf", ZHe_prediction_pretty, width = 6.5, height = 1.75, dpi = 300)
+
+```
+```{r Figure S2C all tT alpha predictions, echo = FALSE}
+alpha_prediction_pretty <- bc_preds_t %>%
+  #filter(eU.at.t1 <= 1000) %>%
+  filter(Rs == 90) %>%
+  #filter(Model.Group == "Grenville Orogeny Exhumation, No Foreland Burial") %>%
+  mutate(max_alpha = max_alpha/(10^(16))) %>%
+  ggplot(aes(x = max_alpha, y = Alpha.Dose/(10^(16)), group = interaction(Path.Name, Rs, Model.Group), color = Model.Group, linetype = Burial, alpha = Burial)) +
+  geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  #geom_vline(xintercept = 100, linetype = "dashed", linewidth = 0.5) +
+  geom_line() +
+  scale_color_manual(values = prehistory_colors) +
+  scale_alpha_manual(values = alpha_levels_burial) +
+  scale_linetype_manual(values = line_types) +
+  coord_cartesian(ylim = c(1, 1000), xlim = c(1, 1000)) +
+  scale_y_log10(name = "Accumulated Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  scale_x_log10(name = "Max Alpha Dose (x 10^16 a/g)", breaks = c(1, 10, 100, 1000), labels = c(1, 10, 100, 1000)) +
+  #scale_x_continuous(name = "eU (ppm)", breaks = seq(0, 1000, 100)) +
+  theme(panel.background = element_rect(fill = "transparent", color = "transparent", linewidth = 2),
+        panel.border = element_rect(fill = NA, color = "black", linewidth = 1),
+        axis.ticks = element_line(colour = "black", linewidth = 0.75),
+        axis.ticks.length = unit(-0.2,"cm"),
+        axis.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+        panel.grid.major = element_line(colour = "transparent", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "transparent", linewidth = 0.5, linetype = 'dashed'),
+        plot.margin = grid::unit(c(0,0,0,0), "mm"),
+        legend.position = "none") +
+  facet_wrap(vars(Model), axes = "margins", nrow = 1)
+alpha_prediction_pretty
+
+#ggsave("/Users/barrapeak/Mirror/eU_Recycling/Writing/Basin_Research_Manuscript/Figures_R_Outputs/alpha.pred.all.models.row.by.alpha_fixed.S2.pdf", alpha_prediction_pretty, width = 6.5, height = 1.75, dpi = 300)
+```

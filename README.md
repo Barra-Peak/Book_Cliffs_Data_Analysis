@@ -14,3 +14,8 @@ Files contained in this repository:
 6. models_fast_late_cooling.xlsx - forward model time-temperature points for alternative model with fast initial cooling
 7. model_predictions.xlsx - HeFTy forward model ZHe date and radiation damage predictions
 8. Book_Cliffs_Figures.RMD - R Markdown file used to make data plots and other plot-type figures
+
+Cited publications:
+Pujols, E.J., Stockli, D.F., 2021. Zircon (U-Th)/(He-Pb) double-dating constraints on the interplay between thrust deformation and foreland basin architecture, Sevier foreland basin, Utah. Geosphere 17, 1890–1913. https://doi.org/10.1130/GES02372.1
+
+Pujols, E.J., Stockli, D.F., Constenius, K.N., Horton, B.K., 2020. Thermochronological and Geochronological Constraints on Late Cretaceous Unroofing and Proximal Sedimentation in the Sevier Orogenic Belt, Utah. Tectonics 39, e2019TC005794. https://doi.org/10.1029/2019TC005794
